@@ -1,0 +1,101 @@
+#include <Encoder.h>
+
+// Pin Encoder
+#define ENCODER_PIN_A 2
+#define ENCODER_PIN_B 3
+
+// Pin Motor
+#define MOTOR_PIN_PWM 9
+#define MOTOR_PIN_DIR 8
+
+// Encoder dan PID
+Encoder motorEncoder(ENCODER_PIN_A, ENCODER_PIN_B);
+volatile long prevPosition = 0;
+
+// PID Variables
+float Kp = 0.02, Ki = 0.00015, Kd = 0;
+float setpoint = 50; // Default Setpoint (RPM)
+float error = 0, prevError = 0, integral = 0, derivative = 0;
+float motorOutput = 0;
+
+// RPM Measurement
+unsigned long prevTime = 0;
+float rpm = 0;
+
+void setup() {
+  // Serial setup
+  Serial.begin(9600);
+
+  // Motor pin setup
+  pinMode(MOTOR_PIN_PWM, OUTPUT);
+  pinMode(MOTOR_PIN_DIR, OUTPUT);
+}
+
+void loop() {
+  unsigned long currentTime = millis();
+  float deltaTime = (currentTime - prevTime) / 1000.0; // Delta time in seconds
+
+  if (deltaTime >= 0.1) { // Update every 100ms
+    // Calculate RPM
+    long currentPosition = motorEncoder.read();
+    long deltaPosition = currentPosition - prevPosition;
+    rpm = (deltaPosition / 20.0) * 60.0; // 20 = encoder steps per revolution
+    prevPosition = currentPosition;
+
+    // PID Control
+    error = setpoint - rpm;
+    integral += error * deltaTime;
+    derivative = (error - prevError) / deltaTime;
+    motorOutput = Kp * error + Ki * integral + Kd * derivative;
+    prevError = error;
+
+    // Limit motor output
+    motorOutput = constrain(motorOutput, -255, 255);
+
+    // Drive motor
+    if (motorOutput > 0) {
+      analogWrite(MOTOR_PIN_PWM, motorOutput);
+      digitalWrite(MOTOR_PIN_DIR, HIGH);
+    } else {
+      analogWrite(MOTOR_PIN_PWM, -motorOutput);
+      digitalWrite(MOTOR_PIN_DIR, LOW);
+    }
+
+    // Send data back to PC
+    Serial.print("RPM:");
+    Serial.print(rpm, 2);
+    Serial.print(",SETPOINT:");
+    Serial.println(setpoint, 2);
+
+    // Update time
+    prevTime = currentTime;
+  }
+
+  // Check for incoming serial commands
+  handleSerialCommands();
+}
+
+void handleSerialCommands() {
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+
+    // Handle PID command
+    if (command.startsWith("PID:")) {
+      int comma1 = command.indexOf(',');
+      int comma2 = command.lastIndexOf(',');
+
+      if (comma1 > 4 && comma2 > comma1) {
+        Kp = command.substring(4, comma1).toFloat();
+        Ki = command.substring(comma1 + 1, comma2).toFloat();
+        Kd = command.substring(comma2 + 1).toFloat();
+        Serial.println("PID Updated");
+      }
+    }
+
+    // Handle Setpoint command
+    if (command.startsWith("SET:")) {
+      setpoint = command.substring(4).toFloat();
+      Serial.println("Setpoint Updated");
+    }
+  }
+}
